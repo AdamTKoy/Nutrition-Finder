@@ -1,0 +1,24 @@
+Building an app using Node.js, TypeScript, and Tailwinds CSS
+
+steps:
+- create project folder
+- update node and nvm:
+    nvm install --lts
+    nvm use --lts (if it didn't automatically)
+- check versions:
+    node --version
+    nvm --version
+- create project framework
+    npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --use-npm
+
+To start the server:
+    npm run dev
+    - this app uses port 3000, so navigate to: localhost:3000
+
+To quit the server: Ctrl-C
+
+The main query form lives at page.tsx
+
+Original 'Check filters' button: 
+<button type="submit" className="w-full rounded-xl bg-emerald-800 px-5 py-3.5 font-semibold text-white transition hover:bg-emerald-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-800">Check filters</button>
+          
