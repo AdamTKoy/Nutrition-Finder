@@ -10,6 +10,7 @@ import {
   Map as GoogleMap,
   useMap,
 } from "@vis.gl/react-google-maps";
+import RestaurantLinks from "@/components/RestaurantLinks";
 
 type MapRestaurant = {
   id: string;
@@ -130,6 +131,7 @@ export default function RestaurantMap({ restaurants }: Props) {
                   {selected.distanceMiles.toFixed(1)} miles from the ZIP-code
                   center
                 </p>
+                <RestaurantLinks restaurant={selected} />
               </div>
             </InfoWindow>
           )}

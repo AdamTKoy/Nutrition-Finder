@@ -30,3 +30,50 @@ Google Maps API Key: AIzaSyAOj8qDG6wXLDY3YY1C8ZAQ6it24WgmX4I
 Google Browser API key: AIzaSyAkZTghQ7Ih2KL4_2RKpUVTSmLlYfUegVY
 
 Correction: Google Maps JavaScript API is the correct browser key: AIzaSyAhyX4MyaobJ-oDiVBVN2FNJXKltWt_yws 
+
+To check for type or linting errors, run:
+- npm run lint
+- npx tsc --noEmit
+
+Terminal 'forgets' version of node at start of every session even though latest is installed,
+so created .nvmrc file in root folder that contains version to use (24.21.0).
+-> then at start of session, run: 'nvm use' in terminal and it should read the nvmrc file and use that version
+
+**Testing via browser's developer console**
+- had to type "allow pasting" first (for security)
+- calls our internal endpoints and doesn't require pasting API keys
+
+> Run this to get first page:
+
+var placesParams = new URLSearchParams({
+  chain: "Chipotle",
+  lat: "41.8839927",
+  lng: "-87.61970559999999",
+});
+
+var firstPage = await fetch(
+  `/api/restaurants?${placesParams}`,
+).then((response) => response.json());
+
+console.log("First page:", firstPage);
+
+> If firstPage.nextPageToken contains a string, you can query for the second page with:
+
+placesParams.set("pageToken", firstPage.nextPageToken);
+
+var secondPage = await fetch(
+  `/api/restaurants?${placesParams}`,
+).then((response) => response.json());
+
+console.log("Second page:", secondPage);
+
+
+Added to 'scripts' section of package.json:
+"test": "vitest run",
+"test:watch": "vitest"
+- the first entry runs once
+- the second entry re-runs tests whenever you save changes
+
+To run tests:
+npm test
+- will run all tests in test.ts files

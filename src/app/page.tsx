@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type SubmitEvent } from "react";
+import { useRef, useState, type SubmitEvent } from "react";
+import RestaurantLinks from "@/components/RestaurantLinks";
 import RestaurantMap from "@/components/RestaurantMap";
 
 const nutrients = [
@@ -9,21 +10,37 @@ const nutrients = [
   { key: "calories", label: "Calories", unit: "kcal" },
 ] as const;
 
+type Coordinates = {
+  lat: number;
+  lng: number;
+};
+
+type LocationResults = {
+  restaurants: Restaurant[];
+  hasMore: boolean;
+  nextPageToken: string | null;
+};
+
 type MenuItem = {
   id: number;
   title: string;
   restaurantChain?: string;
+  nutrition?: {
+    nutrients?: Nutrient[];
+  };
 };
 
 type MenuSearchResponse = {
   menuItems?: MenuItem[];
   error?: string;
+  totalMenuItems?: number;
   upstreamStatus?: number;
 };
 
-type Coordinates = {
-  lat: number;
-  lng: number;
+type Nutrient = {
+  name: string;
+  amount: number;
+  unit: string;
 };
 
 type Restaurant = {
@@ -39,6 +56,16 @@ type RestaurantGroup = {
   items: MenuItem[];
   restaurants: Restaurant[];
   hasMore: boolean;
+  nextPageToken: string | null;
+};
+
+type SearchSession = {
+  query: string;
+  zip: string;
+  offset: number;
+  location?: Coordinates;
+  items: Map<number, MenuItem>;
+  locations: Map<string, LocationResults>;
 };
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -54,22 +81,318 @@ async function fetchJson<T>(url: string): Promise<T> {
   return data as T;
 }
 
+function formatNutrient(item: MenuItem, name: string): string {
+  const nutrient = item.nutrition?.nutrients?.find(
+    (entry) => entry.name.toLowerCase() === name.toLowerCase(),
+  );
+
+  if (
+    !nutrient ||
+    typeof nutrient.amount !== "number" ||
+    !Number.isFinite(nutrient.amount) ||
+    nutrient.amount < 0
+  ) {
+    return "Not available";
+  }
+
+  const amount = nutrient.amount.toLocaleString("en-US", {
+    maximumFractionDigits: 1,
+  });
+
+  return `${amount} ${nutrient.unit ?? ""}`.trim();
+}
+
 export default function Home() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [groups, setGroups] = useState<RestaurantGroup[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasMoreMenu, setHasMoreMenu] = useState(false);
+  const [loadingChain, setLoadingChain] = useState<string | null>(null);
 
-  const mapRestaurants = groups.flatMap((group) => group.restaurants);
+  const sessionRef = useRef<SearchSession | null>(null);
+  const busyRef = useRef(false);
+
+  function clearSearch() {
+    if (busyRef.current) return;
+
+    sessionRef.current = null;
+    setHasMoreMenu(false);
+    setGroups([]);
+    setError("");
+    setMessage("");
+  }
+
+  const nearbyGroups = groups.filter((group) => group.restaurants.length > 0);
+
+  const pendingGroups = groups.filter(
+    (group) => group.restaurants.length === 0 && Boolean(group.nextPageToken),
+  );
+
+  const mapRestaurants = nearbyGroups.flatMap((group) => group.restaurants);
+
+  // - existing results remain while another page loads
+  // - new menu items merge in with pre-existing restaurants when applicable
+  // - repeated chains don't trigger another API request
+  // - editing parameter field or clicking 'Reset' clears both session and 'Load more menu matches' button
+  // - new search restarts result page offset to 0
+  async function loadNextPage() {
+    const session = sessionRef.current;
+    if (!session || busyRef.current) return;
+
+    busyRef.current = true;
+    setIsLoading(true);
+    setError("");
+    setMessage("Loading menu matches…");
+
+    try {
+      const params = new URLSearchParams(session.query);
+      params.set("offset", String(session.offset));
+
+      const menu = await fetchJson<MenuSearchResponse>(
+        `/api/menu-items?${params}`,
+      );
+
+      if (
+        !Array.isArray(menu.menuItems) ||
+        typeof menu.totalMenuItems !== "number" ||
+        !Number.isInteger(menu.totalMenuItems) ||
+        menu.totalMenuItems < 0
+      ) {
+        throw new Error("The menu search returned an unexpected response.");
+      }
+
+      // Prepare the next results without overwriting existing results yet.
+      const combinedItems = new Map(session.items);
+
+      for (const item of menu.menuItems) {
+        combinedItems.set(item.id, item);
+      }
+
+      const chains = new Map<string, { chain: string; items: MenuItem[] }>();
+
+      let missingChainCount = 0;
+
+      for (const item of combinedItems.values()) {
+        const chain = item.restaurantChain?.trim();
+
+        if (!chain) {
+          missingChainCount++;
+          continue;
+        }
+
+        const key = chain.toLowerCase();
+        const existing = chains.get(key);
+
+        if (existing) {
+          existing.items.push(item);
+        } else {
+          chains.set(key, { chain, items: [item] });
+        }
+      }
+
+      // Look up coordinates only once during this search.
+      if (chains.size > 0 && !session.location) {
+        setMessage("Looking up your ZIP code…");
+
+        const geo = await fetchJson<{ location: Coordinates }>(
+          `/api/geocode?${new URLSearchParams({ zip: session.zip })}`,
+        );
+
+        if (
+          !geo.location ||
+          !Number.isFinite(geo.location.lat) ||
+          !Number.isFinite(geo.location.lng)
+        ) {
+          throw new Error("The ZIP lookup returned invalid coordinates.");
+        }
+
+        session.location = geo.location;
+      }
+
+      for (const [key, group] of chains) {
+        // Reuse successful lookups, including those with zero locations.
+        if (session.locations.has(key)) continue;
+
+        const center = session.location;
+        if (!center) throw new Error("Search coordinates are missing.");
+
+        setMessage(`Finding nearby locations: ${group.chain}…`);
+
+        const params = new URLSearchParams({
+          chain: group.chain,
+          lat: String(center.lat),
+          lng: String(center.lng),
+        });
+
+        const result = await fetchJson<LocationResults>(
+          `/api/restaurants?${params}`,
+        );
+
+        if (!Array.isArray(result.restaurants)) {
+          throw new Error("Unexpected restaurant response.");
+        }
+
+        session.locations.set(key, result);
+      }
+
+      const found: RestaurantGroup[] = [];
+
+      for (const [key, group] of chains) {
+        const locations = session.locations.get(key);
+
+        // user can request another page even when filters rejected all locations on first page
+        if (locations) {
+          found.push({ ...group, ...locations });
+        }
+      }
+
+      // Commit only after this page's lookups succeed.
+      session.items = combinedItems;
+
+      const nextOffset = session.offset + 10;
+      const more =
+        menu.menuItems.length > 0 &&
+        nextOffset < menu.totalMenuItems &&
+        nextOffset <= 990;
+
+      session.offset = nextOffset;
+      setGroups(found);
+      setHasMoreMenu(more);
+
+      const moreLocations = Array.from(session.locations.values()).some(
+        (result) => result.hasMore,
+      );
+
+      const chainsWithLocations = found.filter(
+        (group) => group.restaurants.length > 0,
+      ).length;
+
+      setMessage(
+        [
+          `Loaded ${combinedItems.size} unique menu matches.`,
+          chainsWithLocations > 0
+            ? `Nearby candidates found for ${chainsWithLocations} chains.`
+            : "No nearby candidates found among the location pages checked.",
+          missingChainCount > 0
+            ? `${missingChainCount} menu items had no restaurant name.`
+            : "",
+          moreLocations
+            ? "Some chains have additional Google location pages not checked."
+            : "",
+          !more && nextOffset > 990 && menu.totalMenuItems > 1000
+            ? "Reached the menu pagination limit. Narrow your search for other matches."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+    } catch (error) {
+      // Keep the offset unchanged so the button retries the same page.
+      setMessage("");
+      setError(
+        `${
+          error instanceof Error ? error.message : "The search failed."
+        } Existing results are unchanged. Click Load more menu matches to retry.`,
+      );
+    } finally {
+      busyRef.current = false;
+      setIsLoading(false);
+    }
+  }
+
+  async function loadMoreLocations(chain: string) {
+    const session = sessionRef.current;
+    const center = session?.location;
+    const key = chain.toLowerCase();
+    const previous = session?.locations.get(key);
+
+    if (!session || !center || !previous?.nextPageToken || busyRef.current) {
+      return;
+    }
+
+    busyRef.current = true;
+    setIsLoading(true);
+    setLoadingChain(key);
+    setError("");
+    setMessage(`Loading more ${chain} locations…`);
+
+    try {
+      const params = new URLSearchParams({
+        chain,
+        lat: String(center.lat),
+        lng: String(center.lng),
+        pageToken: previous.nextPageToken,
+      });
+
+      const result = await fetchJson<LocationResults>(
+        `/api/restaurants?${params}`,
+      );
+
+      if (
+        !Array.isArray(result.restaurants) ||
+        !(
+          result.nextPageToken === null ||
+          typeof result.nextPageToken === "string"
+        )
+      ) {
+        throw new Error("Unexpected restaurant response.");
+      }
+
+      // Google may return a location we've already seen.
+      const unique = new Map(
+        previous.restaurants.map((restaurant) => [restaurant.id, restaurant]),
+      );
+
+      for (const restaurant of result.restaurants) {
+        unique.set(restaurant.id, restaurant);
+      }
+
+      const merged: LocationResults = {
+        restaurants: Array.from(unique.values()).sort(
+          (a, b) => a.distanceMiles - b.distanceMiles,
+        ),
+        nextPageToken: result.nextPageToken || null,
+        hasMore: Boolean(result.nextPageToken),
+      };
+
+      // Update both the session cache and the rendered results.
+      session.locations.set(key, merged);
+
+      setGroups((current) =>
+        current.map((group) =>
+          group.chain.toLowerCase() === key ? { ...group, ...merged } : group,
+        ),
+      );
+
+      const added = merged.restaurants.length - previous.restaurants.length;
+
+      setMessage(
+        `${chain}: added ${added} new nearby locations. ` +
+          (merged.hasMore
+            ? "More location pages are available."
+            : "All location pages returned by Google have been checked."),
+      );
+    } catch (error) {
+      // Keep the previous results and token so the user can retry.
+      setMessage("");
+      setError(
+        `${
+          error instanceof Error ? error.message : "The location search failed."
+        } Existing locations are unchanged. Try Load more locations again.`,
+      );
+    } finally {
+      busyRef.current = false;
+      setIsLoading(false);
+      setLoadingChain(null);
+    }
+  }
 
   async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (isLoading) return;
-
-    setError("");
-    setMessage("");
-    setGroups([]);
+    if (busyRef.current) return;
+    clearSearch();
 
     const data = new FormData(event.currentTarget);
     const keyword = String(data.get("keyword") ?? "").trim();
@@ -120,151 +443,16 @@ export default function Home() {
       }
     }
 
-    setIsLoading(true);
-    setMessage("Searching menu items…");
+    sessionRef.current = {
+      query: params.toString(),
+      zip,
+      offset: 0,
+      items: new Map(),
+      locations: new Map(),
+    };
 
-    try {
-      const menu = await fetchJson<MenuSearchResponse>(
-        `/api/menu-items?${params.toString()}`,
-      );
-
-      if (!Array.isArray(menu.menuItems)) {
-        throw new Error("The menu search returned an unexpected response.");
-      }
-
-      if (menu.menuItems.length === 0) {
-        setMessage(
-          "No menu items matched. Try broader limits or another keyword.",
-        );
-        return;
-      }
-
-      // Group items so we search each chain only once.
-      const chains = new Map<string, { chain: string; items: MenuItem[] }>();
-      let missingChainCount = 0;
-
-      for (const item of menu.menuItems) {
-        const chain = item.restaurantChain?.trim();
-
-        if (!chain) {
-          missingChainCount++;
-          continue;
-        }
-
-        const key = chain.toLowerCase();
-        const existing = chains.get(key);
-
-        if (existing) {
-          existing.items.push(item);
-        } else {
-          chains.set(key, { chain, items: [item] });
-        }
-      }
-
-      if (chains.size === 0) {
-        setMessage(
-          "Matching menu items were found, but none included restaurant names.",
-        );
-        return;
-      }
-
-      setMessage("Looking up your ZIP code…");
-
-      const geo = await fetchJson<{ location: Coordinates }>(
-        `/api/geocode?${new URLSearchParams({ zip })}`,
-      );
-
-      if (
-        !geo.location ||
-        !Number.isFinite(geo.location.lat) ||
-        !Number.isFinite(geo.location.lng)
-      ) {
-        throw new Error("The ZIP lookup returned invalid coordinates.");
-      }
-
-      const found: RestaurantGroup[] = [];
-      const failures: string[] = [];
-      let checked = 0;
-      let hasMore = false;
-
-      // Search sequentially to avoid a burst of Google requests.
-      for (const group of chains.values()) {
-        checked++;
-        setMessage(
-          `Finding nearby locations: ${group.chain} (${checked}/${chains.size})…`,
-        );
-
-        const locationParams = new URLSearchParams({
-          chain: group.chain,
-          lat: String(geo.location.lat),
-          lng: String(geo.location.lng),
-        });
-
-        try {
-          const result = await fetchJson<{
-            restaurants: Restaurant[];
-            hasMore: boolean;
-          }>(`/api/restaurants?${locationParams}`);
-
-          if (!Array.isArray(result.restaurants)) {
-            throw new Error("Unexpected restaurant response.");
-          }
-
-          hasMore ||= result.hasMore;
-
-          if (result.restaurants.length > 0) {
-            found.push({
-              ...group,
-              restaurants: result.restaurants,
-              hasMore: result.hasMore,
-            });
-          }
-        } catch (error) {
-          failures.push(
-            `${group.chain}: ${
-              error instanceof Error ? error.message : "Lookup failed."
-            }`,
-          );
-        }
-      }
-
-      setGroups(found);
-
-      const summary =
-        found.length > 0
-          ? `Nearby location candidates found for ${found.length} restaurant chains.`
-          : failures.length > 0
-            ? "No nearby locations were returned by the completed lookups."
-            : "No nearby locations were found among the menu matches checked.";
-
-      setMessage(
-        [
-          summary,
-          "Search covers the first 10 menu matches.",
-          hasMore
-            ? "Some chains have additional Google results not checked yet."
-            : "",
-          missingChainCount > 0
-            ? `${missingChainCount} menu items had no restaurant name.`
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
-
-      if (failures.length > 0) {
-        setError(`Some location lookups failed. ${failures.join("; ")}`);
-      }
-    } catch (error) {
-      setMessage("");
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Unable to complete the search.",
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    setHasMoreMenu(true);
+    await loadNextPage();
   }
 
   const inputClass =
@@ -286,16 +474,8 @@ export default function Home() {
 
         <form
           onSubmit={handleSubmit}
-          onChange={() => {
-            setError("");
-            setMessage("");
-            setGroups([]);
-          }}
-          onReset={() => {
-            setError("");
-            setMessage("");
-            setGroups([]);
-          }}
+          onChange={clearSearch}
+          onReset={clearSearch}
           className="mt-9 space-y-7 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm sm:p-8"
         >
           <fieldset
@@ -413,7 +593,46 @@ export default function Home() {
             </p>
           </fieldset>
         </form>
-        {groups.length > 0 && (
+        {hasMoreMenu && (
+          <button
+            type="button"
+            onClick={() => void loadNextPage()}
+            disabled={isLoading}
+            className="mt-6 w-full rounded-xl border border-emerald-800 px-5 py-3 font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-50"
+          >
+            {isLoading ? "Loading…" : "Load more menu matches"}
+          </button>
+        )}
+        {pendingGroups.length > 0 && (
+          <details className="mt-6 rounded-xl border border-stone-200 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-stone-700">
+              Check remaining location pages ({pendingGroups.length} chains)
+            </summary>
+
+            <p className="mt-2 text-sm text-stone-600">
+              No nearby locations have been found for these chains yet.
+              Additional pages may contain matches.
+            </p>
+
+            <ul className="mt-3 space-y-2">
+              {pendingGroups.map((group) => (
+                <li key={group.chain}>
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => void loadMoreLocations(group.chain)}
+                    className="text-sm font-medium text-emerald-800 underline disabled:opacity-50"
+                  >
+                    {loadingChain === group.chain.toLowerCase()
+                      ? `Checking ${group.chain}…`
+                      : `Check more ${group.chain} locations`}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {nearbyGroups.length > 0 && (
           <section aria-labelledby="results-heading" className="mt-10">
             <h2 id="results-heading" className="text-2xl font-semibold">
               Nearby restaurant candidates
@@ -426,7 +645,7 @@ export default function Home() {
             </p>
             <RestaurantMap restaurants={mapRestaurants} />
             <div className="mt-5 space-y-6">
-              {groups.map((group) => (
+              {nearbyGroups.map((group) => (
                 <article
                   key={group.chain}
                   className="rounded-2xl border border-stone-200 bg-white p-6"
@@ -436,9 +655,29 @@ export default function Home() {
                   <h4 className="mt-4 font-medium">
                     Menu matches from Spoonacular
                   </h4>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-stone-700">
+                  <p className="mt-1 text-xs text-stone-500">
+                    Nutrition as reported by Spoonacular. Serving sizes vary by
+                    item.
+                  </p>
+
+                  <ul className="mt-3 space-y-3">
                     {group.items.map((item) => (
-                      <li key={item.id}>{item.title}</li>
+                      <li key={item.id} className="rounded-xl bg-stone-50 p-4">
+                        <h5 className="text-sm font-semibold text-stone-900">
+                          {item.title}
+                        </h5>
+
+                        <dl className="mt-3 grid grid-cols-3 gap-3">
+                          {["Protein", "Fat", "Calories"].map((name) => (
+                            <div key={name}>
+                              <dt className="text-xs text-stone-500">{name}</dt>
+                              <dd className="mt-1 text-sm font-medium text-stone-900">
+                                {formatNutrient(item, name)}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </li>
                     ))}
                   </ul>
 
@@ -455,6 +694,13 @@ export default function Home() {
                       </span>
                     </div>
 
+                    {group.restaurants.length === 0 && (
+                      <p className="mt-3 text-sm text-stone-600">
+                        No matching locations within five miles were found on
+                        the pages checked.
+                      </p>
+                    )}
+
                     <ul className="mt-3 space-y-4">
                       {group.restaurants.map((restaurant) => (
                         <li key={restaurant.id}>
@@ -466,14 +712,23 @@ export default function Home() {
                             {restaurant.distanceMiles.toFixed(1)} miles from the
                             ZIP-code center
                           </p>
+                          <RestaurantLinks restaurant={restaurant} />
                         </li>
                       ))}
                     </ul>
 
-                    {group.hasMore && (
-                      <p className="mt-3 text-sm text-stone-500">
-                        Additional location results have not been checked.
-                      </p>
+                    {group.nextPageToken && (
+                      <button
+                        type="button"
+                        onClick={() => void loadMoreLocations(group.chain)}
+                        disabled={isLoading}
+                        aria-label={`Load more locations for ${group.chain}`}
+                        className="mt-4 rounded-xl border border-emerald-800 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-50"
+                      >
+                        {loadingChain === group.chain.toLowerCase()
+                          ? "Loading locations…"
+                          : "Load more locations"}
+                      </button>
                     )}
                   </div>
                 </article>

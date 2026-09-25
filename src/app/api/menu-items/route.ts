@@ -12,12 +12,23 @@ export async function GET(request: Request) {
     "https://api.spoonacular.com/food/menuItems/search",
   );
 
-  // A fixed search to verify the connection first. (commenting out since it works)
-  // url.searchParams.set("apiKey", apiKey);
-  // url.searchParams.set("query", "burger");
-  // url.searchParams.set("number", "2");
-
   const incoming = new URL(request.url).searchParams;
+
+  const offset = Number(incoming.get("offset") ?? "0");
+
+  if (
+    !Number.isInteger(offset) ||
+    offset < 0 ||
+    offset > 990 ||
+    offset % 10 !== 0
+  ) {
+    return Response.json(
+      { error: "Offset must be a multiple of 10 between 0 and 990." },
+      { status: 400 },
+    );
+  }
+
+  url.searchParams.set("offset", String(offset));
 
   const keyword = incoming.get("keyword")?.trim() ?? "";
 
@@ -31,6 +42,7 @@ export async function GET(request: Request) {
   url.searchParams.set("query", keyword);
   url.searchParams.set("apiKey", apiKey);
   url.searchParams.set("number", "10");
+  url.searchParams.set("addMenuItemInformation", "true");
 
   for (const nutrient of ["Protein", "Fat", "Calories"] as const) {
     const minName = `min${nutrient}`;

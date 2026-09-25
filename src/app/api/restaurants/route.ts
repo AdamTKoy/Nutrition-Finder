@@ -1,3 +1,6 @@
+import { distanceInMiles } from "@/lib/distance";
+import { matchesRestaurantChain } from "@/lib/restaurant-matching";
+
 type Place = {
   id: string;
   displayName?: { text: string };
@@ -13,29 +16,9 @@ type PlacesResponse = {
   nextPageToken?: string;
 };
 
-// Calculate straight-line distance over the Earth's surface.
-function distanceInMiles(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
-) {
-  const radians = (degrees: number) => (degrees * Math.PI) / 180;
-
-  const deltaLat = radians(lat2 - lat1);
-  const deltaLng = radians(lng2 - lng1);
-
-  const a =
-    Math.sin(deltaLat / 2) ** 2 +
-    Math.cos(radians(lat1)) *
-      Math.cos(radians(lat2)) *
-      Math.sin(deltaLng / 2) ** 2;
-
-  return 3958.8 * 2 * Math.asin(Math.sqrt(Math.min(1, Math.max(0, a))));
-}
-
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
+  const pageToken = params.get("pageToken") || undefined;
   const chain = params.get("chain")?.trim() ?? "";
   const latText = params.get("lat")?.trim() ?? "";
   const lngText = params.get("lng")?.trim() ?? "";
@@ -94,6 +77,7 @@ export async function GET(request: Request) {
         body: JSON.stringify({
           textQuery: chain,
           pageSize: 20,
+          pageToken,  // if undefined, stringify will omit it
           locationBias: {
             circle: {
               center: { latitude: lat, longitude: lng },
@@ -120,7 +104,11 @@ export async function GET(request: Request) {
 
     const restaurants = (data.places ?? [])
       .flatMap((place) => {
-        if (!place.location) return [];
+        const placeName = place.displayName?.text;
+
+        if (!place.location || !placeName) return [];
+
+        if (!matchesRestaurantChain(chain, placeName)) return [];
 
         const distanceMiles = distanceInMiles(
           lat,
@@ -133,7 +121,7 @@ export async function GET(request: Request) {
 
         return [{
           id: place.id,
-          name: place.displayName?.text ?? "Unnamed location",
+          name: placeName,
           address: place.formattedAddress ?? "",
           location: {
             lat: place.location.latitude,
@@ -149,6 +137,7 @@ export async function GET(request: Request) {
       center: { lat, lng },
       restaurants,
       hasMore: Boolean(data.nextPageToken),
+      nextPageToken: data.nextPageToken ?? null,
     });
   } catch {
     return Response.json(
