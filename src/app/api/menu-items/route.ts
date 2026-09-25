@@ -92,6 +92,17 @@ export async function GET(request: Request) {
       signal: AbortSignal.timeout(10_000),
     });
 
+    if (response.status === 402) {
+      return Response.json(
+        {
+          code: "SPOONACULAR_QUOTA_EXHAUSTED",
+          error: "Menu search is temporarily unavailable because the API quota is exhausted.",
+          upstreamStatus: 402,
+        },
+        { status: 503 },  // we send 503 to indicate that the service is temporarily unavailable (until free daily point quota resets)
+      );
+    }
+
     if (!response.ok) {
       return Response.json(
         {

@@ -68,6 +68,17 @@ type SearchSession = {
   locations: Map<string, LocationResults>;
 };
 
+// since our class extends Error, other standard error handling will continue to work
+class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   const data = await response.json();
@@ -75,7 +86,10 @@ async function fetchJson<T>(url: string): Promise<T> {
   if (!response.ok) {
     const details = data.upstreamStatus ? ` (${data.upstreamStatus})` : "";
 
-    throw new Error((data.error ?? "The request failed.") + details);
+    throw new ApiError(
+      (data.error ?? "The request failed.") + details,
+      typeof data.code === "string" ? data.code : undefined,
+    );
   }
 
   return data as T;
@@ -109,6 +123,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [hasMoreMenu, setHasMoreMenu] = useState(false);
   const [loadingChain, setLoadingChain] = useState<string | null>(null);
+  const [quotaExhausted, setQuotaExhausted] = useState(false);
 
   const sessionRef = useRef<SearchSession | null>(null);
   const busyRef = useRef(false);
@@ -138,7 +153,7 @@ export default function Home() {
   // - new search restarts result page offset to 0
   async function loadNextPage() {
     const session = sessionRef.current;
-    if (!session || busyRef.current) return;
+    if (!session || busyRef.current || quotaExhausted) return;
 
     busyRef.current = true;
     setIsLoading(true);
@@ -288,13 +303,21 @@ export default function Home() {
           .join(" "),
       );
     } catch (error) {
-      // Keep the offset unchanged so the button retries the same page.
       setMessage("");
-      setError(
-        `${
-          error instanceof Error ? error.message : "The search failed."
-        } Existing results are unchanged. Click Load more menu matches to retry.`,
-      );
+
+      if (
+        error instanceof ApiError &&
+        error.code === "SPOONACULAR_QUOTA_EXHAUSTED"
+      ) {
+        setQuotaExhausted(true);
+        setError("");
+      } else {
+        setError(
+          `${
+            error instanceof Error ? error.message : "The search failed."
+          } Existing results are unchanged. Click Load more menu matches to retry.`,
+        );
+      }
     } finally {
       busyRef.current = false;
       setIsLoading(false);
@@ -391,7 +414,7 @@ export default function Home() {
   async function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (busyRef.current) return;
+    if (busyRef.current || quotaExhausted) return;
     clearSearch();
 
     const data = new FormData(event.currentTarget);
@@ -579,7 +602,8 @@ export default function Home() {
 
               <button
                 type="submit"
-                className="flex-1 rounded-xl bg-emerald-800 px-5 py-3.5 font-semibold text-white transition hover:bg-emerald-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-800"
+                disabled={isLoading || quotaExhausted}
+                className="flex-1 rounded-xl bg-emerald-800 px-5 py-3.5 font-semibold text-white transition hover:bg-emerald-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isLoading ? "Searching…" : "Find nearby restaurants"}
               </button>
@@ -593,12 +617,25 @@ export default function Home() {
             </p>
           </fieldset>
         </form>
+        {quotaExhausted && (
+          <div
+            role="alert"
+            className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+          >
+            <p className="font-semibold">Menu search quota reached</p>
+            <p className="mt-1">
+              New menu searches are temporarily unavailable. Any loaded results
+              remain available. Wait for the quota to reset, then reload this
+              page to try again.
+            </p>
+          </div>
+        )}
         {hasMoreMenu && (
           <button
             type="button"
             onClick={() => void loadNextPage()}
-            disabled={isLoading}
-            className="mt-6 w-full rounded-xl border border-emerald-800 px-5 py-3 font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-wait disabled:opacity-50"
+            disabled={isLoading || quotaExhausted}
+            className="mt-6 w-full rounded-xl border border-emerald-800 px-5 py-3 font-semibold text-emerald-800 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isLoading ? "Loading…" : "Load more menu matches"}
           </button>

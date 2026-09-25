@@ -1,4 +1,5 @@
 // Calculate straight-line distance over the Earth's surface.
+// Note: result location may correspond to distance > 5 mi. via available driving route
 export function distanceInMiles(
   lat1: number,
   lng1: number,

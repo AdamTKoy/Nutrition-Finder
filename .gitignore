@@ -42,3 +42,8 @@ next-env.d.ts
 
 # my notes
 notes.txt
+
+# playwright browser testing
+/test-results/
+/playwright-report/
+/playwright/.cache/

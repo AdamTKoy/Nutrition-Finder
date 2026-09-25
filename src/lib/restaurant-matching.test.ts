@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { matchesRestaurantChain } from "./restaurant-matching";
 
 // protects both side of matching policy: 
-// accept known variations and reject addt'l words that might ID another business
+// accept known variations (i.e. KFC and Kentucky Fried Chicken) 
+// and reject addt'l/other words that might ID another business (i.e. Burger King vs Burger Kingdom)
 describe("matchesRestaurantChain", () => {
   it.each([
     ["McDonald's", "McDonald’s"],
