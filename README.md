@@ -1,8 +1,10 @@
 # Nutrition Finder
 
-This project is a continuation and enhancement from a group project I completed during my Stats+CS degree at UIUC. At that time in fall 2023, AI agents were not as common or robust as they are now, so we scrapped together a very primitive project that used homemade data and ineffective UI. With the help of ChatGPT, I set up a clean, simple front end using TypeScript and Tailwind CSS. We worked through everything step by step and I implemented all the changes myself (for learning + muscle memory). We also double-checked each step with automated and/or manual testing.
+This project is a continuation and enhancement from a group project I completed during my Stats+CS degree at UIUC. At that time in fall 2023, AI agents were not as common or robust as they are now, so we scrapped together a very primitive project that used homemade data and ineffective UI. 
 
-The final product is imperfect due to the strict limitation on free API calls to Spoonacular. But I believe these are the seeds for a great service that implements specific nutrition goals into eating out.
+This time around, I utilized pre-existing data from the Spoonacular API. With the help of ChatGPT, I set up a clean, simple front end using TypeScript and Tailwind CSS. The agent and I worked through everything step by step and I implemented all the changes myself (for learning + muscle memory). We also double-checked each step with automated and/or manual testing.
+
+The final product is imperfect due to the strict limitation on free API calls to Spoonacular. But I believe these are the seeds for a great service that implements specific nutrition goals into eating out. In the future, I would also love to incorporate food allergy/sensitivity info like gluten, eggs, peanuts, etc.
 
 [![CI](https://github.com/AdamTKoy/Nutrition-Finder/actions/workflows/ci.yml/badge.svg)](https://github.com/AdamTKoy/Nutrition-Finder/actions/workflows/ci.yml)
 
@@ -12,7 +14,15 @@ Nutrition Finder helps users discover restaurant menu items that fit their prote
 
 This is a personal software development portfolio project. Live searches depend on third-party API quotas and may be temporarily unavailable when the daily allowance is exhausted. Automated tests use mocked responses and do not consume API quota.
 
-<!-- TODO: Add desktop and mobile screenshots with descriptive alt text. -->
+<img src="screenshots/01_Search.png" alt="Main Page Search" style="width: 50%;">
+
+<img src="screenshots/02_Results_Item_Map.png" alt="Initial Results" style="width: 50%;">
+
+<img src="screenshots/03_LoadMore.png" alt="Load More Button" style="width: 50%;">
+
+<img src="screenshots/04_LoadMore_Map.png" alt="Map - Added Results" style="width: 50%;">
+
+<img src="screenshots/05_LoadMore_AddtlItems.png" alt="Location/Item - Added Results" style="width: 50%;">
 
 ## Features
 
